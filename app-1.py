@@ -2,12 +2,14 @@ import streamlit as st
 import requests
 import json
 import time
+from datetime import datetime
 
 # ─── Page Config ───────────────────────────────────────────────
 st.set_page_config(
     page_title="OpenRouter Key Tester",
     page_icon="🔬",
-    layout="centered"
+    layout="wide", # تم التغيير إلى wide لإظهار القائمة الجانبية بشكل أفضل
+    initial_sidebar_state="expanded"
 )
 
 # ─── Styles ────────────────────────────────────────────────────
@@ -154,36 +156,50 @@ hr { border-color: #1e3050 !important; }
 
 /* Hide streamlit branding */
 #MainMenu, footer, header { visibility: hidden; }
+
+/* Sidebar styling */
+[data-testid="stSidebar"] {
+    background-color: #050810 !important;
+    border-right: 1px solid #1e3050 !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
-# ─── DeepSeek Models ─────────────────────────────────────────
-DEEPSEEK_MODELS = {
-    "deepseek/deepseek-chat-v3-0324": "DeepSeek Chat V3 (0324) — Latest",
-    "deepseek/deepseek-r1": "DeepSeek R1 — Reasoning",
-    "deepseek/deepseek-r1-zero": "DeepSeek R1 Zero",
-    "deepseek/deepseek-r1-distill-llama-70b": "R1 Distill — Llama 70B",
-    "deepseek/deepseek-r1-distill-llama-8b": "R1 Distill — Llama 8B",
-    "deepseek/deepseek-r1-distill-qwen-32b": "R1 Distill — Qwen 32B",
-    "deepseek/deepseek-r1-distill-qwen-14b": "R1 Distill — Qwen 14B",
-    "deepseek/deepseek-r1-distill-qwen-7b": "R1 Distill — Qwen 7B",
-    "deepseek/deepseek-r1-distill-qwen-1.5b": "R1 Distill — Qwen 1.5B",
-    "deepseek/deepseek-prover-v2": "DeepSeek Prover V2",
+# ─── Models ──────────────────────────────────────────────────
+MODELS = {
+    "meta-llama/llama-3.1-8b-instruct":            "🆓 Llama 3.1 8B — مجاني",
+    "meta-llama/llama-3.2-3b-instruct":             "🆓 Llama 3.2 3B — مجاني",
+    "mistralai/mistral-7b-instruct":                "🆓 Mistral 7B — مجاني",
+    "google/gemma-2-9b-it":                         "🆓 Gemma 2 9B — مجاني",
+    "deepseek/deepseek-r1-distill-llama-8b":        "🆓 DeepSeek R1 Distill 8B — مجاني",
+    "qwen/qwen-2.5-7b-instruct":                    "🆓 Qwen 2.5 7B — مجاني",
+    "microsoft/phi-3-mini-128k-instruct":           "🆓 Phi-3 Mini — مجاني",
+    "deepseek/deepseek-chat-v3-0324":              "💰 DeepSeek Chat V3 (Latest)",
+    "deepseek/deepseek-r1":                        "💰 DeepSeek R1 — Reasoning",
+    "deepseek/deepseek-r1-distill-llama-70b":      "💰 R1 Distill — Llama 70B",
+    "deepseek/deepseek-r1-distill-qwen-32b":       "💰 R1 Distill — Qwen 32B",
+    "deepseek/deepseek-r1-distill-qwen-14b":       "💰 R1 Distill — Qwen 14B",
+    "deepseek/deepseek-r1-distill-qwen-7b":        "💰 R1 Distill — Qwen 7B",
+    "deepseek/deepseek-prover-v2":                 "💰 DeepSeek Prover V2",
 }
 
 # ─── Session State ───────────────────────────────────────────
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "sessions" not in st.session_state:
+    st.session_state.sessions = {"default": {"title": "المحادثة الأولى", "messages": []}}
+if "active_session" not in st.session_state:
+    st.session_state.active_session = "default"
 if "api_status" not in st.session_state:
-    st.session_state.api_status = None  # None / "ok" / "fail"
+    st.session_state.api_status = None
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
+if "github_token" not in st.session_state:
+    st.session_state.github_token = ""
 if "balance_info" not in st.session_state:
     st.session_state.balance_info = None
 
 # ─── Functions ───────────────────────────────────────────────
 def check_api_key(api_key: str) -> dict:
-    """Test the API key by fetching account info"""
     try:
         r = requests.get(
             "https://openrouter.ai/api/v1/auth/key",
@@ -198,7 +214,6 @@ def check_api_key(api_key: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 def chat_with_model(api_key: str, model: str, messages: list) -> dict:
-    """Send chat request to OpenRouter"""
     try:
         payload = {
             "model": model,
@@ -226,9 +241,100 @@ def chat_with_model(api_key: str, model: str, messages: list) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def save_to_github(github_token: str, title: str, messages: list):
+    try:
+        content = f"# {title}\n\n"
+        for m in messages:
+            role = "User" if m["role"] == "user" else "Assistant"
+            content += f"**{role}**:\n{m['content']}\n\n---\n\n"
+            
+        payload = {
+            "description": f"Chat Export: {title}",
+            "public": False,
+            "files": {
+                f"chat_{int(time.time())}.md": {
+                    "content": content
+                }
+            }
+        }
+        
+        r = requests.post(
+            "https://api.github.com/gists",
+            headers={
+                "Authorization": f"Bearer {github_token}",
+                "Accept": "application/vnd.github.v3+json"
+            },
+            json=payload,
+            timeout=15
+        )
+        if r.status_code == 201:
+            return {"ok": True, "url": r.json().get("html_url")}
+        else:
+            return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+# ─── Sidebar (Sessions & GitHub) ─────────────────────────────
+with st.sidebar:
+    st.markdown('<div style="color:#00ccff; font-weight:bold; font-family:\'JetBrains Mono\';">⬡ SESSIONS</div>', unsafe_allow_html=True)
+    
+    if st.button("➕ محادثة جديدة", use_container_width=True):
+        new_id = str(int(time.time()))
+        st.session_state.sessions[new_id] = {
+            "title": f"محادثة {len(st.session_state.sessions) + 1}",
+            "messages": []
+        }
+        st.session_state.active_session = new_id
+        st.rerun()
+        
+    st.markdown("---")
+    
+    for session_id, session_data in list(st.session_state.sessions.items()):
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            btn_label = f"💬 {session_data['title']}"
+            if session_id == st.session_state.active_session:
+                btn_label = f"🟢 {session_data['title']}"
+            if st.button(btn_label, key=f"sel_{session_id}", use_container_width=True):
+                st.session_state.active_session = session_id
+                st.rerun()
+        with col2:
+            if st.button("🗑", key=f"del_{session_id}"):
+                if len(st.session_state.sessions) > 1:
+                    del st.session_state.sessions[session_id]
+                    if st.session_state.active_session == session_id:
+                        st.session_state.active_session = list(st.session_state.sessions.keys())[0]
+                    st.rerun()
+                else:
+                    st.session_state.sessions[session_id]["messages"] = []
+                    st.rerun()
+                    
+    st.markdown("---")
+    st.markdown('<div style="font-size:12px; color:#556677;">GitHub Token لحفظ المحادثات (Gist)</div>', unsafe_allow_html=True)
+    github_token_input = st.text_input("GitHub Token", type="password", value=st.session_state.github_token, label_visibility="collapsed")
+    if github_token_input:
+        st.session_state.github_token = github_token_input
+
 # ─── UI Layout ───────────────────────────────────────────────
-st.markdown('<div class="main-title">⬡ OPENROUTER TESTER</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">DeepSeek Model Explorer · Key Validator</div>', unsafe_allow_html=True)
+active_session_data = st.session_state.sessions[st.session_state.active_session]
+
+col_title, col_export = st.columns([4, 1])
+with col_title:
+    st.markdown('<div class="main-title">⬡ OPENROUTER TESTER</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">DeepSeek Model Explorer · Key Validator</div>', unsafe_allow_html=True)
+with col_export:
+    if st.button("💾 حفظ في GitHub"):
+        if not st.session_state.github_token:
+            st.error("المرجو إدخال GitHub Token في القائمة الجانبية")
+        elif not active_session_data["messages"]:
+            st.warning("المحادثة فارغة")
+        else:
+            with st.spinner("جاري الحفظ..."):
+                res = save_to_github(st.session_state.github_token, active_session_data["title"], active_session_data["messages"])
+                if res["ok"]:
+                    st.success(f"تم الحفظ بنجاح! [عرض الرابط]({res['url']})")
+                else:
+                    st.error(f"فشل الحفظ: {res['error']}")
 
 # ─── API Key Section ─────────────────────────────────────────
 col1, col2 = st.columns([4, 1])
@@ -296,15 +402,15 @@ elif st.session_state.api_status == "fail":
 st.markdown("---")
 selected_model_key = st.selectbox(
     "اختار الموديل",
-    options=list(DEEPSEEK_MODELS.keys()),
-    format_func=lambda x: DEEPSEEK_MODELS[x],
+    options=list(MODELS.keys()),
+    format_func=lambda x: MODELS[x],
     index=0
 )
 
 # ─── Chat History ─────────────────────────────────────────────
-if st.session_state.messages:
+if active_session_data["messages"]:
     st.markdown("---")
-    for msg in st.session_state.messages:
+    for msg in active_session_data["messages"]:
         if msg["role"] == "user":
             st.markdown(f'<div class="msg-user">{msg["content"]}</div>', unsafe_allow_html=True)
         else:
@@ -335,13 +441,17 @@ if st.session_state.api_status != "ok" and (send_btn or user_input):
 if send_btn and user_input and st.session_state.api_status == "ok":
     api_key = st.session_state.api_key
     
-    # Add user message
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # Update title if it's the first message
+    if not active_session_data["messages"]:
+        st.session_state.sessions[st.session_state.active_session]["title"] = user_input[:20] + "..."
     
-    # Build messages list for API (only role + content)
+    # Add user message
+    st.session_state.sessions[st.session_state.active_session]["messages"].append({"role": "user", "content": user_input})
+    
+    # Build messages list for API
     api_messages = [
         {"role": m["role"], "content": m["content"]}
-        for m in st.session_state.messages
+        for m in st.session_state.sessions[st.session_state.active_session]["messages"]
     ]
     
     with st.spinner("جاري الاتصال..."):
@@ -350,22 +460,16 @@ if send_btn and user_input and st.session_state.api_status == "ok":
     if result["ok"]:
         usage = result.get("usage", {})
         tokens_info = f"[tokens: {usage.get('total_tokens', '?')}]" if usage else ""
-        st.session_state.messages.append({
+        st.session_state.sessions[st.session_state.active_session]["messages"].append({
             "role": "assistant",
             "content": result["content"],
             "model": f"{selected_model_key} {tokens_info}"
         })
     else:
-        st.session_state.messages.append({
+        st.session_state.sessions[st.session_state.active_session]["messages"].append({
             "role": "assistant",
             "content": f"❌ خطأ: {result['error']}",
             "model": selected_model_key
         })
     
     st.rerun()
-
-# ─── Clear Chat ───────────────────────────────────────────────
-if st.session_state.messages:
-    if st.button("🗑️ مسح المحادثة", use_container_width=False):
-        st.session_state.messages = []
-        st.rerun()
